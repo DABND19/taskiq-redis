@@ -203,3 +203,26 @@ async def test_list_queue_sentinel_broker(
     assert worker_task.result() == valid_broker_message.message
     worker_task.cancel()
     await broker.shutdown()
+
+
+@pytest.mark.anyio
+async def test_list_queue_sentinel_broker_max_connections(
+    valid_broker_message: BrokerMessage,
+    redis_sentinels: List[Tuple[str, int]],
+    redis_sentinel_master_name: str,
+) -> None:
+    broker = ListQueueSentinelBroker(
+        sentinels=redis_sentinels,
+        master_name=redis_sentinel_master_name,
+        max_connection_pool_size=3,
+        connection_pool_timeout=1,
+    )
+    worker_tasks = [asyncio.create_task(get_message(broker)) for _ in range(3)]
+    await asyncio.sleep(0.3)
+
+    await asyncio.gather(*[broker.kick(valid_broker_message) for _ in range(50)])
+    await asyncio.sleep(0.3)
+
+    for worker in worker_tasks:
+        worker.cancel()
+    await broker.shutdown()

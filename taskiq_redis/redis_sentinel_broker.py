@@ -1,3 +1,4 @@
+import asyncio
 import sys
 from contextlib import asynccontextmanager
 from logging import getLogger
@@ -44,6 +45,8 @@ class BaseSentinelBroker(AsyncBroker):
         queue_name: str = "taskiq",
         min_other_sentinels: int = 0,
         sentinel_kwargs: Optional[Any] = None,
+        max_connection_pool_size: Optional[int] = None,
+        connection_pool_timeout: Optional[float] = None,
         **connection_kwargs: Any,
     ) -> None:
         super().__init__(
@@ -60,10 +63,25 @@ class BaseSentinelBroker(AsyncBroker):
         self.master_name = master_name
         self.queue_name = queue_name
 
+        self._connection_pool_timeout = connection_pool_timeout
+        if max_connection_pool_size is not None:
+            self._connections_sem = asyncio.Semaphore(max_connection_pool_size)
+        else:
+            self._connections_sem = None
+
     @asynccontextmanager
     async def _acquire_master_conn(self) -> AsyncIterator[_Redis]:
-        async with self.sentinel.master_for(self.master_name) as redis_conn:
-            yield redis_conn
+        if self._connections_sem:
+            await asyncio.wait_for(
+                self._connections_sem.acquire(),
+                timeout=self._connection_pool_timeout,
+            )
+        try:
+            async with self.sentinel.master_for(self.master_name) as redis_conn:
+                yield redis_conn
+        finally:
+            if self._connections_sem:
+                self._connections_sem.release()
 
 
 class ListQueueSentinelBroker(BaseSentinelBroker):
